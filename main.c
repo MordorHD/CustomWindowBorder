@@ -1,4 +1,38 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <windows.h>
+#include <windowsx.h>
+#include <stdbool.h>
+#include "msgtostr.h"
+#include "stb_image.h"
 
+#define SIZE_SCROLL 5
+
+#define CSCROLL_MINSIZE 18
+
+struct cscroll {
+    RECT rcTrack;
+    RECT rcThumb;
+    int page;
+    int pos, max;
+};
+
+struct cframe {
+    RECT rcClient;
+    RECT rcWindow;
+    RECT rcIcon, rcClose, rcMin, rcMax;
+    RECT rcTitle;
+    char *title;
+    HICON hIcon;
+    HBRUSH hbrFrame;
+    HBRUSH hbrOutline;
+    HBRUSH hbrClose, hbrShadowClose;
+    HBRUSH hbrButtons, hbrShadowButtons;
+    HBRUSH hbrTrack, hbrThumb;
+    COLORREF clrCaption;
+    struct cscroll vert, horz;
+    LPVOID lpVoid;
+};
 
 HWND CCreateFrame(LPCSTR className, LPCSTR title, LONG style, HICON hIcon, int x, int y, int width, int height, LPVOID lpVoid)
 {
@@ -1358,4 +1392,303 @@ LRESULT CALLBACK CFrameProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         return 0;
     }
     return 0;//DefWindowProc(hWnd, msg, wParam, lParam);
+}
+
+bool OpenFileDialog(OPENFILENAME *ofn, bool load)
+{
+    char *filePath, *fileTitle;
+
+    filePath = malloc(MAX_PATH);
+    *filePath = 0;
+    fileTitle = malloc(MAX_PATH);
+    *fileTitle = 0;
+    memset(ofn, 0, sizeof(*ofn));
+    ofn->lStructSize = sizeof(*ofn);
+    ofn->lpstrFile = filePath;
+    ofn->nMaxFile = MAX_PATH;
+    ofn->lpstrFilter = "All\0*.*\0"
+                       "Bitmap\0*.bmp\0"
+                       "PNG\0*.png\0"
+                       "JPG\0*.jpg\0"
+                       "JPEG\0*.jpeg\0"
+                       "GIF\0*.gif\0";
+    ofn->nFilterIndex = 0;
+    ofn->lpstrFileTitle = fileTitle;
+    ofn->nMaxFileTitle = MAX_PATH;
+    ofn->Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+    return load ? GetOpenFileName(ofn) : GetSaveFileName(ofn);
+}
+
+LRESULT CALLBACK IVProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    static HDC imageDc;
+    static int width, height;
+    static int lastX = -1, lastY;
+    static float zoom = 1.0f;
+    static bool ofnOpen;
+    float ratio;
+    SCROLLINFO si;
+    int x, y, dx, dy;
+    HBITMAP hBmp;
+    BITMAP bmp;
+    PAINTSTRUCT ps;
+    HDC hdc;
+    RECT r;
+    OPENFILENAME ofn;
+    int pixelCnt;
+    BYTE *pixelsIn, *basePixelsIn;
+    COLORREF *pixelsOut, *basePixelsOut;
+    int comp;
+    COLORREF rgb;
+    BYTE blue;
+    int newVScroll, newHScroll;
+    struct cframe *frame = (struct cframe*) GetWindowLongPtr(hWnd, GWLP_USERDATA);
+    switch(msg)
+    {
+    case WM_CREATE:
+        hdc = GetDC(hWnd);
+        imageDc = CreateCompatibleDC(hdc);
+        hBmp = LoadImage(NULL, "TestImage.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+        GetObject(hBmp, sizeof(bmp), &bmp);
+        width = bmp.bmWidth;
+        height = bmp.bmHeight;
+        SelectObject(imageDc, hBmp);
+        ReleaseDC(hWnd, hdc);
+        return 0;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_SIZE:
+        if(wParam == SIZE_SCROLL)
+            return 0;
+        si.cbSize = sizeof(si);
+        si.fMask = SIF_ALL;
+        si.nPage = HIWORD(lParam);
+        si.nMax = height * zoom - si.nPage;
+        si.nPos = newVScroll = min(frame->vert.pos, si.nMax);
+        dy = newVScroll - frame->vert.pos;
+        CSetScrollInfo(hWnd, SB_VERT, &si);
+
+        GetClientRect(hWnd, &r);
+        si.nPage = r.right;
+        si.nMax = width * zoom - si.nPage;
+        si.nPos = newHScroll = min(frame->horz.pos, si.nMax);
+        dx = newHScroll - frame->horz.pos;
+        CSetScrollInfo(hWnd, SB_HORZ, &si);
+
+        ScrollWindow(hWnd, -dx, -dy, NULL, NULL);
+        return 0;
+    case WM_PAINT:
+        hdc = BeginPaint(hWnd, &ps);
+        GetClientRect(hWnd, &r);
+        dx = r.right - width * zoom;
+        dy = r.bottom - height * zoom;
+        if(dx > 0)
+        {
+            r.left = r.right - dx;
+            FillRect(hdc, &r, GetStockObject(WHITE_BRUSH));
+        }
+        if(dy > 0)
+        {
+            r.left = 0;
+            r.top = r.bottom - dy;
+            FillRect(hdc, &r, GetStockObject(WHITE_BRUSH));
+        }
+        StretchBlt(hdc, 0, 0, width * zoom, height * zoom, imageDc, frame->horz.pos / zoom, frame->vert.pos / zoom, width, height, SRCCOPY);
+        EndPaint(hWnd, &ps);
+        return 0;
+    case WM_SETCURSOR:
+        if(LOWORD(lParam) == HTCLIENT)
+        {
+            SetCursor(LoadCursor(NULL, IDC_CROSS));
+            return 0;
+        }
+        break;
+    case WM_RBUTTONUP:
+        if(ofnOpen)
+            return 0;
+        ofnOpen = 1;
+        if(OpenFileDialog(&ofn, 1))
+        {
+            if(!(pixelsIn = stbi_load(ofn.lpstrFile, (int*) &bmp.bmWidth, (int*) &bmp.bmHeight, &comp, 0)))
+            {
+                MessageBox(NULL, "I can't open the file you gave me, please don't hurt me :(", "Couldn't open file", MB_APPLMODAL | MB_OK | MB_ICONERROR);
+                return 0;
+            }
+            pixelCnt = bmp.bmWidth * bmp.bmHeight;
+            if(comp != 4)
+                pixelsOut = basePixelsOut = malloc(4 * pixelCnt);
+            else
+                pixelsOut = basePixelsOut = (COLORREF*) pixelsIn;
+            basePixelsIn = pixelsIn;
+            while(pixelCnt--)
+            {
+                switch(comp)
+                {
+                case STBI_grey: rgb = 0xFF000000 | (*pixelsIn << 16) | (*pixelsIn << 8) | *pixelsIn;  break;
+                case STBI_grey_alpha: rgb = (*(pixelsIn + 1) << 24) | (*pixelsIn << 16) | (*pixelsIn << 8) | *pixelsIn;  break;
+                case STBI_rgb: rgb = 0xFF000000 | *((COLORREF*) pixelsIn); break;
+                case STBI_rgb_alpha: rgb = *((COLORREF*) pixelsIn); break;
+                }
+                blue = rgb & 0xFF;
+                rgb = (rgb & 0xFFFFFF00) | ((rgb & 0x00FF0000) >> 16);
+                rgb = (rgb & 0xFF00FFFF) | (blue << 16);
+                *(pixelsOut++) = rgb;
+                pixelsIn += comp;
+            }
+            if(comp != 4)
+                free(basePixelsIn);
+            bmp.bmType = 0;
+            bmp.bmBits = basePixelsOut;
+            bmp.bmBitsPixel = sizeof(COLORREF) * 8;
+            bmp.bmPlanes = 1;
+            bmp.bmWidthBytes = bmp.bmWidth * sizeof(COLORREF);
+            hBmp = CreateBitmapIndirect(&bmp);
+            if(!hBmp)
+            {
+                MessageBox(NULL, "I can't open the file you gave me, please don't hurt me :(", "Couldn't open file", MB_APPLMODAL | MB_OK | MB_ICONERROR);
+                return 0;
+            }
+            GetObject(hBmp, sizeof(bmp), &bmp);
+            width = bmp.bmWidth;
+            height = bmp.bmHeight;
+            zoom = 1.0f;
+            DeleteObject(SelectObject(imageDc, hBmp)); // delete old bitmap
+            free(ofn.lpstrFile);
+            free(ofn.lpstrFileTitle);
+
+            GetClientRect(hWnd, &r);
+            si.cbSize = sizeof(si);
+            si.fMask = SIF_ALL;
+            si.nPage = r.bottom;
+            si.nMax = height * zoom - si.nPage;
+            si.nPos = 0;
+            CSetScrollInfo(hWnd, SB_VERT, &si);
+
+            GetClientRect(hWnd, &r);
+            si.nPage = r.right;
+            si.nMax = width * zoom - si.nPage;
+            si.nPos = 0;
+            CSetScrollInfo(hWnd, SB_HORZ, &si);
+
+            RedrawWindow(hWnd, NULL, NULL, RDW_INVALIDATE);
+        }
+        ofnOpen = 0;
+        return 0;
+    case WM_LBUTTONDOWN:
+        lastX = GET_X_LPARAM(lParam);
+        lastY = GET_Y_LPARAM(lParam);
+        SetCapture(hWnd);
+        return 0;
+    case WM_LBUTTONUP:
+        ReleaseCapture();
+        return 0;
+    case WM_MOUSEMOVE:
+        x = GET_X_LPARAM(lParam);
+        y = GET_Y_LPARAM(lParam);
+        if(wParam == MK_LBUTTON)
+        {
+            newVScroll = frame->vert.pos + lastY - y;
+            newVScroll = max(newVScroll, 0);
+            newVScroll = min(newVScroll, frame->vert.max);
+
+            newHScroll = frame->horz.pos + lastX - x;
+            newHScroll = max(newHScroll, 0);
+            newHScroll = min(newHScroll, frame->horz.max);
+
+            dy = newVScroll - frame->vert.pos;
+            dx = newHScroll - frame->horz.pos;
+
+            if(dx || dy)
+            {
+                CSetScrollPos(hWnd, SB_VERT, newVScroll);
+                CSetScrollPos(hWnd, SB_HORZ, newHScroll);
+                ScrollWindow(hWnd, -dx, -dy, NULL, NULL);
+            }
+        }
+        lastX = x;
+        lastY = y;
+        return 0;
+    case WM_MOUSEWHEEL:
+        if(wParam & MK_CONTROL)
+        {
+            x = GET_X_LPARAM(lParam);
+            y = GET_Y_LPARAM(lParam);
+            ratio = zoom;
+            zoom *= GET_WHEEL_DELTA_WPARAM(wParam) < 0 ? 9.0f / 10.0f : 10.0f / 9.0f;
+            ratio /= zoom;
+            GetClientRect(hWnd, &r);
+            CSetScrollRange(hWnd, SB_VERT, height * zoom - r.bottom);
+            CSetScrollRange(hWnd, SB_HORZ, width * zoom - r.right);
+            RedrawWindow(hWnd, NULL, NULL, RDW_INVALIDATE);
+            return 0;
+        }
+        newVScroll = frame->vert.pos - GET_WHEEL_DELTA_WPARAM(wParam) / 10;
+        goto do_v_scroll;
+    case WM_HSCROLL:
+        newHScroll = frame->horz.pos;
+        switch(LOWORD(wParam))
+        {
+        case SB_PAGELEFT: newHScroll -= 50; break;
+        case SB_PAGERIGHT: newHScroll += 50; break;
+        case SB_THUMBPOSITION:
+        case SB_THUMBTRACK:
+            newHScroll = (short) HIWORD(wParam);
+            break;
+        }
+        newHScroll = max(newHScroll, 0);
+        newHScroll = min(newHScroll, frame->horz.max);
+        if(newHScroll == frame->horz.pos)
+            return 0;
+        dx = newHScroll - frame->horz.pos;
+        CSetScrollPos(hWnd, SB_HORZ, newHScroll);
+        ScrollWindow(hWnd, -dx, 0, NULL, NULL);
+        return 0;
+    case WM_VSCROLL:
+        newVScroll = frame->vert.pos;
+        switch(LOWORD(wParam))
+        {
+        case SB_PAGEUP: newVScroll -= 50; break;
+        case SB_PAGEDOWN: newVScroll += 50; break;
+        case SB_THUMBPOSITION:
+        case SB_THUMBTRACK:
+            newVScroll = (short) HIWORD(wParam);
+            break;
+        }
+    do_v_scroll:
+        newVScroll = max(newVScroll, 0);
+        newVScroll = min(newVScroll, frame->vert.max);
+        if(newVScroll == frame->vert.pos)
+            return 0;
+        dy = newVScroll - frame->vert.pos;
+        CSetScrollPos(hWnd, SB_VERT, newVScroll);
+        ScrollWindow(hWnd, 0, -dy, NULL, NULL);
+        return 0;
+    }
+    return CFrameProc(hWnd, msg, wParam, lParam);
+}
+
+int main(void)
+{
+    WNDCLASS wc;
+    memset(&wc, 0, sizeof(wc));
+    wc.lpszClassName = "CFrame";
+    wc.lpfnWndProc = CFrameProc;
+    wc.style = CS_OWNDC;
+    wc.hbrBackground = GetStockObject(WHITE_BRUSH);
+    RegisterClass(&wc);
+    wc.lpszClassName = "ImageView";
+    wc.lpfnWndProc = IVProc;
+    RegisterClass(&wc);
+    CCreateFrame("CFrame", "Title", WS_VISIBLE | WS_OVERLAPPEDWINDOW, LoadImage(NULL, "Icon.ico", IMAGE_ICON, 0, 0, LR_LOADFROMFILE), 100, 100, 300, 400, NULL);
+    CCreateFrame("ImageView", "Title", WS_VISIBLE | WS_OVERLAPPEDWINDOW | WS_HSCROLL | WS_VSCROLL, LoadImage(NULL, "Icon.ico", IMAGE_ICON, 0, 0, LR_LOADFROMFILE), 490, 100, 300, 400, NULL);
+    MSG msg;
+    while(GetMessage(&msg, NULL, 0, 0))
+    {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+    return 0;
 }
