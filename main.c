@@ -289,14 +289,6 @@ void CFrameButton(HWND hWnd, struct cframe *frame, WPARAM wParam, LPARAM lParam)
         // should never happen
         return;
     }
-
-    /*
-    * FIXME: Not sure where to do this, but we must flush the pending
-    * window updates when someone clicks on the close button and at
-    * the same time the window is overlapped with another one. This
-    * looks like a good place for now...
-    */
-    // TODO: ?? co_IntUpdateWindows(pWnd, RDW_ALLCHILDREN, FALSE);
     RedrawWindow(hWnd, NULL, NULL, RDW_ALLCHILDREN | RDW_UPDATENOW);
 
     hdc = GetDCEx(hWnd, NULL, DCX_WINDOW);
