@@ -1,41 +1,6 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <windows.h>
-#include <windowsx.h>
-#include <stdbool.h>
-#include "msgtostr.h"
 
-#define CFRAME_MINWIDTH 140
-#define CFRAME_MINHEIGHT 80
-#define CSCROLL_MINSIZE 10
-#define CSCROLL_SIZE 13
-#define SIZE_SCROLL 5 // size message was sent from scroll bars
 
-struct cscroll {
-    RECT rcTrack;
-    RECT rcThumb;
-    int page;
-    int pos, max;
-};
-
-struct cframe {
-    RECT rcClient;
-    RECT rcWindow;
-    RECT rcIcon, rcClose, rcMin, rcMax;
-    RECT rcTitle;
-    char *title;
-    HICON hIcon;
-    HBRUSH hbrFrame;
-    HBRUSH hbrOutline;
-    HBRUSH hbrClose, hbrShadowClose;
-    HBRUSH hbrButtons, hbrShadowButtons;
-    HBRUSH hbrTrack, hbrThumb;
-    COLORREF clrCaption;
-    struct cscroll vert, horz;
-    LPVOID lpVoid;
-};
-
-HWND CCreateFrame(LPCSTR className, LPCSTR title, HICON hIcon, int x, int y, int width, int height, LPVOID lpVoid)
+HWND CCreateFrame(LPCSTR className, LPCSTR title, LONG style, HICON hIcon, int x, int y, int width, int height, LPVOID lpVoid)
 {
     HWND hWnd;
     struct cframe *frame;
@@ -61,7 +26,7 @@ HWND CCreateFrame(LPCSTR className, LPCSTR title, HICON hIcon, int x, int y, int
     frame->hbrShadowButtons = CreateSolidBrush(0x6C4141);
     frame->hbrThumb = CreateSolidBrush(0x5B4900);
     frame->clrCaption = 0x969483;
-    hWnd = CreateWindow(className, title, WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | WS_BORDER | WS_THICKFRAME | WS_CAPTION | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU, x, y, width, height, NULL, NULL, NULL, frame);
+    hWnd = CreateWindow(className, title, style, x, y, width, height, NULL, NULL, NULL, frame);
     return hWnd;
 }
 
@@ -104,9 +69,9 @@ LRESULT CFrameNCCalcSize(HWND hWnd, struct cframe *frame, RECT *rect, WPARAM wPa
     if(!(style & WS_MINIMIZE))
     {
         if(style & WS_THICKFRAME)
-            InflateRect(rect, -8, -8); // TODO: MAGIC NUMBERS
+            InflateRect(rect, -GetSystemMetrics(SM_CXFRAME), -GetSystemMetrics(SM_CYFRAME));
         else if((exStyle & WS_EX_STATICEDGE) || (style & WS_BORDER))
-            InflateRect(rect, -1, -1);
+            InflateRect(rect, -GetSystemMetrics(SM_CXBORDER), -GetSystemMetrics(SM_CXBORDER));
 
         if((style & WS_CAPTION) == WS_CAPTION)
         {
@@ -118,23 +83,25 @@ LRESULT CFrameNCCalcSize(HWND hWnd, struct cframe *frame, RECT *rect, WPARAM wPa
                 rect->top += GetSystemMetrics(SM_CYCAPTION);
             last.bottom = rect->top - frame->rcWindow.top;
             frame->rcIcon = (RECT) { rect->left - frame->rcWindow.left, last.top, rect->left - frame->rcWindow.left + 16, last.top + 16};
-            frame->rcClose = (RECT) { last.left - 34, last.top, last.left, last.bottom - 4 };
-            last.left -= 36;
-        }
+            if(style & WS_SYSMENU)
+            {
+                frame->rcClose = (RECT) { last.left - 34, last.top, last.left, last.bottom - 4 };
+                last.left -= 36;
 
-        if(style & WS_MAXIMIZEBOX)
-        {
-            frame->rcMax = (RECT) { last.left - 34, last.top, last.left, last.bottom - 4 };
-            last.left -= 36;
-        }
-        if(style & WS_MINIMIZEBOX)
-        {
-            frame->rcMin = (RECT) { last.left - 34, last.top, last.left, last.bottom - 4 };
-            last.left -= 36;
-        }
+                if(style & WS_MAXIMIZEBOX)
+                {
+                    frame->rcMax = (RECT) { last.left - 34, last.top, last.left, last.bottom - 4 };
+                    last.left -= 36;
+                }
+                if(style & WS_MINIMIZEBOX)
+                {
+                    frame->rcMin = (RECT) { last.left - 34, last.top, last.left, last.bottom - 4 };
+                    last.left -= 36;
+                }
+            }
 
-        if((style & WS_CAPTION) == WS_CAPTION)
             frame->rcTitle = (RECT) { frame->rcIcon.right + 4, last.top, last.left, last.bottom };
+        }
 
         if(exStyle & WS_EX_CLIENTEDGE)
             InflateRect(rect, -2 * GetSystemMetrics(SM_CXBORDER), -2 * GetSystemMetrics(SM_CYBORDER));
@@ -194,14 +161,17 @@ LRESULT CFrameHitTest(HWND hWnd, struct cframe *frame, POINT p)
     style = GetWindowLong(hWnd, GWL_STYLE);
     relativePoint.x -= r.left;
     relativePoint.y -= r.top;
-    if(PtInRect(&frame->rcClose, relativePoint))
-        return HTCLOSE;
-    if(PtInRect(&frame->rcMin, relativePoint))
-        return HTMINBUTTON;
-    if(PtInRect(&frame->rcMax, relativePoint))
-        return HTMAXBUTTON;
-    if(PtInRect(&frame->rcIcon, relativePoint))
-        return HTCAPTION;
+    if((style & WS_CAPTION) == WS_CAPTION)
+    {
+        if(PtInRect(&frame->rcClose, relativePoint))
+            return HTCLOSE;
+        if(PtInRect(&frame->rcMin, relativePoint))
+            return HTMINBUTTON;
+        if(PtInRect(&frame->rcMax, relativePoint))
+            return HTMAXBUTTON;
+        if(PtInRect(&frame->rcIcon, relativePoint))
+            return HTCAPTION;
+    }
     if((style & WS_VSCROLL) && PtInRect(&frame->vert.rcTrack, relativePoint))
         return HTVSCROLL;
     if((style & WS_HSCROLL) && PtInRect(&frame->horz.rcTrack, relativePoint))
@@ -228,12 +198,12 @@ LRESULT CFrameHitTest(HWND hWnd, struct cframe *frame, POINT p)
             return HTLEFT;
         if(p.x >= r.right - 8)
             return HTRIGHT;
-        if((style & WS_CAPTION) && p.y <= r.top + 30)
+        if((style & WS_CAPTION) == WS_CAPTION && p.y <= r.top + 30)
             return HTCAPTION;
     }
     else
     {
-        if((style & WS_CAPTION) && p.y <= r.top + 22)
+        if((style & WS_CAPTION) == WS_CAPTION && p.y <= r.top + 22)
             return HTCAPTION;
     }
     return HTCLIENT;
@@ -298,17 +268,10 @@ void CFrameButton(HWND hWnd, struct cframe *frame, WPARAM wParam, LPARAM lParam)
 
     while(GetMessage(&msg, NULL, WM_MOUSEFIRST, WM_MOUSELAST))
     {
-        /* TODO: WHEN IS THIS NEEDED AND WHY? if(CallMsgFilter(&msg, MSGF_MAX))
-            continue;*/
         if(msg.message == WM_LBUTTONUP)
             break;
         if(msg.message != WM_MOUSEMOVE)
-        {
-            // TODO: is this really necessary?
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
             continue;
-        }
 
         p = msg.pt;
         p.x -= frame->rcWindow.left;
@@ -655,6 +618,7 @@ void CFrameMoveSize(HWND hWnd, struct cframe *frame, WPARAM wParam)
     BOOL thickFrame;
     BOOL iconic;
     HWND parent = NULL;
+    HDC hdc;
     MINMAXINFO mmi;
     MSG msg;
     POINT p;
@@ -681,10 +645,6 @@ void CFrameMoveSize(HWND hWnd, struct cframe *frame, WPARAM wParam)
         return;
 
     thickFrame = (style & WS_THICKFRAME) && !iconic;
-
-    //
-    // Show window contents while dragging the window, get flag from registry data.
-    //
     SystemParametersInfo(SPI_GETDRAGFULLWINDOWS, 0, &dragFullWindows, 0);
 
     GetCursorPos(&p);
@@ -773,11 +733,15 @@ void CFrameMoveSize(HWND hWnd, struct cframe *frame, WPARAM wParam)
 
     SetCapture(hWnd);
 
+    hdc = GetDCEx(parent, NULL, DCX_CACHE);
+
     while(GetMessage(&msg, NULL, 0, 0))
     {
         p = msg.pt;
         if(msg.message == WM_LBUTTONUP)
         {
+            if(moved)
+                DrawFocusRect(hdc, &sizingRect);
             // check for snapping if was moved by caption
             if(hitTest == HTCAPTION && thickFrame && !(exStyle & WS_EX_MDICHILD))
             {
@@ -799,14 +763,22 @@ void CFrameMoveSize(HWND hWnd, struct cframe *frame, WPARAM wParam)
                         snapRect.left = (snapRect.right - snapRect.left) / 2 + snapRect.left;
                     }
                     SetWindowPos(hWnd, HWND_TOP, snapRect.left, snapRect.top, snapRect.right - snapRect.left, snapRect.bottom - snapRect.top, 0);
+                    moved = 0;
                 }
                 else if(p.y <= snapRect.top) // maximize if dragged to top
+                {
                     SendMessage(hWnd, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
+                    moved = 0;
+                }
             }
             break;
         }
         if(msg.message == WM_KEYDOWN && (msg.wParam == VK_RETURN || msg.wParam == VK_ESCAPE))
+        {
+            if(moved)
+                DrawFocusRect(hdc, &sizingRect);
             break;
+        }
 
         if(msg.message != WM_KEYDOWN && msg.message != WM_MOUSEMOVE)
         {
@@ -857,8 +829,6 @@ void CFrameMoveSize(HWND hWnd, struct cframe *frame, WPARAM wParam)
                 else
                     newRect = sizingRect;
 
-                if(!iconic && !dragFullWindows)
-                    ; // TODO: UserDrawMovingFrame(hdc, &sizingRect, thickframe);
                 if(hitTest == HTCAPTION)
                     OffsetRect(&newRect, dx, dy);
                 if(hitTest == HTLEFT || hitTest == HTTOPLEFT || hitTest == HTBOTTOMLEFT)
@@ -885,18 +855,23 @@ void CFrameMoveSize(HWND hWnd, struct cframe *frame, WPARAM wParam)
                 if(!iconic)
                 {
                     if(!dragFullWindows)
-                        ;//TODO: UserDrawMovingFrame(hdc, &newRect, thickframe);
+                    {
+                        if(moved)
+                            DrawFocusRect(hdc, &sizingRect);
+                        DrawFocusRect(hdc, &newRect);
+                    }
                     else
                         SetWindowPos(hWnd, HWND_TOP,
                                      newRect.left, newRect.top,
                                      newRect.right - newRect.left, newRect.bottom - newRect.top,
-                                     (hitTest == HTCAPTION) ? SWP_NOSIZE : SWP_NOCOPYBITS);
+                                     hitTest == HTCAPTION ? SWP_NOSIZE : SWP_NOCOPYBITS);
                 }
                 sizingRect = newRect;
             }
             moved = 1;
         }
     }
+    ReleaseDC(parent, hdc);
     ReleaseCapture();
 
     NotifyWinEvent(EVENT_SYSTEM_MOVESIZEEND, hWnd, OBJID_WINDOW, CHILDID_SELF);
@@ -904,25 +879,21 @@ void CFrameMoveSize(HWND hWnd, struct cframe *frame, WPARAM wParam)
     SendMessage(hWnd, WM_EXITSIZEMOVE, 0, 0);
     if(moved)
     {
-        /* if the moving/resizing isn't canceled call SetWindowPos
-        * with the new position or the new size of the window
-        */
-        if(!(msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE))
+        if(!(msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE)) // escape cancels moving/sizing of window
         {
-            /* NOTE: SWP_NOACTIVATE prevents document window activation in Word 6 */
             if(!dragFullWindows || iconic)
                 SetWindowPos(hWnd, HWND_TOP,
                              sizingRect.left, sizingRect.top,
                              sizingRect.right - sizingRect.left, sizingRect.bottom - sizingRect.top,
-                             (hitTest == HTCAPTION) ? SWP_NOSIZE : 0);
+                             hitTest == HTCAPTION ? SWP_NOSIZE : 0);
         }
         else
-        { /* restore previous size/position */
+        {
             if(dragFullWindows)
                 SetWindowPos(hWnd, HWND_TOP,
                              origRect.left, origRect.top,
                              origRect.right - origRect.left, origRect.bottom - origRect.top,
-                             (hitTest == HTCAPTION) ? SWP_NOSIZE : 0);
+                             hitTest == HTCAPTION ? SWP_NOSIZE : 0);
         }
     }
     /* Single click brings up the system menu when iconized */
@@ -978,6 +949,7 @@ int CSetScrollInfo(HWND hWnd, int bar, SCROLLINFO *si)
     struct cscroll *scroll;
     const int styleFlag = WS_HSCROLL << bar;
     HDC hdc;
+    RECT r;
     if(!si->fMask)
         return 0;
     if(si->fMask == SIF_POS)
@@ -990,18 +962,22 @@ int CSetScrollInfo(HWND hWnd, int bar, SCROLLINFO *si)
     if(si->fMask & SIF_RANGE)
         scroll->max = max(si->nMax, 0);
     if(si->fMask & SIF_POS)
-        scroll->pos = max(0, min(si->nPos, scroll->max));
+        scroll->pos = si->nPos;
+    scroll->pos = max(0, min(scroll->pos, scroll->max));
     if(!scroll->max)
     {
         if(style & styleFlag)
         {
             SetWindowLong(hWnd, GWL_STYLE, style ^ styleFlag);
-            RedrawWindow(hWnd, NULL, NULL, RDW_INVALIDATE | RDW_FRAME);
             if(bar == SB_HORZ)
                 frame->rcClient.bottom += GetSystemMetrics(SM_CYHSCROLL);
             else
                 frame->rcClient.right += GetSystemMetrics(SM_CXVSCROLL);
             SendMessage(hWnd, WM_SIZE, SIZE_SCROLL, MAKELPARAM(frame->rcClient.right - frame->rcClient.left, frame->rcClient.bottom - frame->rcClient.top));
+            r = scroll->rcTrack;
+            r.left -= frame->rcClient.left;
+            r.top -= frame->rcClient.top;
+            RedrawWindow(hWnd, &r, NULL, RDW_INVALIDATE);
         }
     }
     else
@@ -1040,13 +1016,17 @@ int CSetScrollInfo(HWND hWnd, int bar, SCROLLINFO *si)
         if(!(style & styleFlag))
         {
             SetWindowLong(hWnd, GWL_STYLE, style | styleFlag);
-            RedrawWindow(hWnd, NULL, NULL, RDW_INVALIDATE);
             SendMessage(hWnd, WM_SIZE, SIZE_SCROLL, MAKELPARAM(frame->rcClient.right - frame->rcClient.left, frame->rcClient.bottom - frame->rcClient.top));
         }
         hdc = GetDCEx(hWnd, NULL, DCX_WINDOW);
         FillRect(hdc, &scroll->rcTrack, frame->hbrTrack);
         FillRect(hdc, &scroll->rcThumb, frame->hbrThumb);
         FrameRect(hdc, &scroll->rcThumb, frame->hbrOutline);
+        if(style & (WS_HSCROLL << !bar))
+        {
+            r = (RECT) { frame->horz.rcTrack.right, frame->vert.rcTrack.bottom, frame->vert.rcTrack.right, frame->horz.rcTrack.bottom };
+            FillRect(hdc, &r, frame->hbrThumb);
+        }
         ReleaseDC(hWnd, hdc);
     }
     return scroll->pos;
@@ -1378,189 +1358,4 @@ LRESULT CALLBACK CFrameProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         return 0;
     }
     return 0;//DefWindowProc(hWnd, msg, wParam, lParam);
-}
-
-LRESULT CALLBACK IVProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
-{
-    static HDC imageDc;
-    static int width, height;
-    static int lastX = -1, lastY;
-    static float zoom = 1.0f;
-    float ratio;
-    SCROLLINFO si;
-    int x, y, dx, dy;
-    HBITMAP hBmp;
-    BITMAP bmp;
-    PAINTSTRUCT ps;
-    HDC hdc;
-    RECT r;
-    int newVScroll, newHScroll;
-    struct cframe *frame = (struct cframe*) GetWindowLongPtr(hWnd, GWLP_USERDATA);
-    switch(msg)
-    {
-    case WM_CREATE:
-        hdc = GetDC(hWnd);
-        imageDc = CreateCompatibleDC(hdc);
-        hBmp = LoadImage(NULL, "TestImage.bmp", IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
-        GetObject(hBmp, sizeof(bmp), &bmp);
-        width = bmp.bmWidth;
-        height = bmp.bmHeight;
-        SelectObject(imageDc, hBmp);
-        ReleaseDC(hWnd, hdc);
-        return 0;
-    case WM_DESTROY:
-        PostQuitMessage(0);
-        return 0;
-    case WM_ERASEBKGND:
-        return 1;
-    case WM_SIZE:
-        if(wParam == SIZE_SCROLL)
-            return 0;
-        si.cbSize = sizeof(si);
-        si.fMask = SIF_ALL;
-        si.nPage = HIWORD(lParam);
-        si.nMax = height * zoom - si.nPage;
-        si.nPos = newVScroll = min(frame->vert.pos, si.nMax);
-        dy = newVScroll - frame->vert.pos;
-        CSetScrollInfo(hWnd, SB_VERT, &si);
-
-        GetClientRect(hWnd, &r);
-        si.nPage = r.right;
-        si.nMax = width * zoom - si.nPage;
-        si.nPos = newHScroll = min(frame->horz.pos, si.nMax);
-        dx = newHScroll - frame->horz.pos;
-        CSetScrollInfo(hWnd, SB_HORZ, &si);
-
-        ScrollWindow(hWnd, -dx, -dy, NULL, NULL);
-        return 0;
-    case WM_PAINT:
-        hdc = BeginPaint(hWnd, &ps);
-        GetClientRect(hWnd, &r);
-        StretchBlt(hdc, 0, 0, width * zoom, height * zoom, imageDc, frame->horz.pos / zoom, frame->vert.pos / zoom, width, height, SRCCOPY);
-        EndPaint(hWnd, &ps);
-        return 0;
-    case WM_SETCURSOR:
-        if(LOWORD(lParam) == HTCLIENT)
-        {
-            SetCursor(LoadCursor(NULL, IDC_CROSS));
-            return 0;
-        }
-        break;
-    case WM_LBUTTONDOWN:
-        lastX = GET_X_LPARAM(lParam);
-        lastY = GET_Y_LPARAM(lParam);
-        SetCapture(hWnd);
-        return 0;
-    case WM_LBUTTONUP:
-        ReleaseCapture();
-        return 0;
-    case WM_MOUSEMOVE:
-        x = GET_X_LPARAM(lParam);
-        y = GET_Y_LPARAM(lParam);
-        if(wParam == MK_LBUTTON)
-        {
-            newVScroll = frame->vert.pos + lastY - y;
-            newVScroll = max(newVScroll, 0);
-            newVScroll = min(newVScroll, frame->vert.max);
-
-            newHScroll = frame->horz.pos + lastX - x;
-            newHScroll = max(newHScroll, 0);
-            newHScroll = min(newHScroll, frame->horz.max);
-
-            dy = newVScroll - frame->vert.pos;
-            dx = newHScroll - frame->horz.pos;
-
-            if(dx || dy)
-            {
-                CSetScrollPos(hWnd, SB_VERT, newVScroll);
-                CSetScrollPos(hWnd, SB_HORZ, newHScroll);
-                ScrollWindow(hWnd, -dx, -dy, NULL, NULL);
-            }
-        }
-        lastX = x;
-        lastY = y;
-        return 0;
-    case WM_MOUSEWHEEL:
-        if(wParam & MK_CONTROL)
-        {
-            x = GET_X_LPARAM(lParam);
-            y = GET_Y_LPARAM(lParam);
-            ratio = zoom;
-            zoom *= GET_WHEEL_DELTA_WPARAM(wParam) < 0 ? 9.0f / 10.0f : 10.0f / 9.0f;
-            ratio /= zoom;
-            GetClientRect(hWnd, &r);
-            CSetScrollRange(hWnd, SB_VERT, height * zoom - r.bottom);
-            CSetScrollRange(hWnd, SB_HORZ, width * zoom - r.right);
-            RedrawWindow(hWnd, NULL, NULL, RDW_INVALIDATE);
-            return 0;
-        }
-        newVScroll = frame->vert.pos - GET_WHEEL_DELTA_WPARAM(wParam) / 10;
-        goto do_v_scroll;
-    case WM_HSCROLL:
-        newHScroll = frame->horz.pos;
-        switch(LOWORD(wParam))
-        {
-        case SB_PAGELEFT: newHScroll -= 50; break;
-        case SB_PAGERIGHT: newHScroll += 50; break;
-        case SB_THUMBPOSITION:
-        case SB_THUMBTRACK:
-            newHScroll = (short) HIWORD(wParam);
-            break;
-        }
-        newHScroll = max(newHScroll, 0);
-        newHScroll = min(newHScroll, frame->horz.max);
-        if(newHScroll == frame->horz.pos)
-            return 0;
-        dx = newHScroll - frame->horz.pos;
-        CSetScrollPos(hWnd, SB_HORZ, newHScroll);
-        ScrollWindow(hWnd, -dx, 0, NULL, NULL);
-        return 0;
-    case WM_VSCROLL:
-        newVScroll = frame->vert.pos;
-        switch(LOWORD(wParam))
-        {
-        case SB_PAGEUP: newVScroll -= 50; break;
-        case SB_PAGEDOWN: newVScroll += 50; break;
-        case SB_THUMBPOSITION:
-        case SB_THUMBTRACK:
-            newVScroll = (short) HIWORD(wParam);
-            break;
-        }
-    do_v_scroll:
-        newVScroll = max(newVScroll, 0);
-        newVScroll = min(newVScroll, frame->vert.max);
-        if(newVScroll == frame->vert.pos)
-            return 0;
-        dy = newVScroll - frame->vert.pos;
-        CSetScrollPos(hWnd, SB_VERT, newVScroll);
-        ScrollWindow(hWnd, 0, -dy, NULL, NULL);
-        return 0;
-    }
-    return CFrameProc(hWnd, msg, wParam, lParam);
-}
-
-int main(void)
-{
-    WNDCLASS wc;
-    memset(&wc, 0, sizeof(wc));
-    wc.lpszClassName = "CFrame";
-    wc.lpfnWndProc = CFrameProc;
-    wc.style = CS_OWNDC;
-    wc.hbrBackground = GetStockObject(WHITE_BRUSH);
-    RegisterClass(&wc);
-    wc.lpszClassName = "ImageView";
-    wc.lpfnWndProc = IVProc;
-    RegisterClass(&wc);
-    wc.lpszClassName = "DEFWINDOW";
-    wc.lpfnWndProc = DefWindowProc;
-    RegisterClass(&wc);
-    //CCreateFrame("CFrame", "Title", LoadImage(NULL, "Icon.ico", IMAGE_ICON, 0, 0, LR_LOADFROMFILE), 100, 100, 300, 400, NULL);
-    CCreateFrame("ImageView", "Title", LoadImage(NULL, "Icon.ico", IMAGE_ICON, 0, 0, LR_LOADFROMFILE), 190, 100, 300, 400, NULL);
-    MSG msg;
-    while(GetMessage(&msg, NULL, 0, 0))
-    {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
-    }
-    return 0;
 }
